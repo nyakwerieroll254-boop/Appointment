@@ -232,20 +232,14 @@ async function loadServices() {
 
 function updatePaymentActionLabel() {
   const method = bookingForm.querySelector('input[name="paymentMethod"]:checked')?.value;
-  const label = method === "pesapal"
-    ? "Request & continue to secure checkout"
-    : method === "daraja_stk"
-      ? "Request & send STK Push"
-      : "Request & view M-Pesa details";
+  const label = method === "none"
+    ? "Confirm booking"
+    : method === "pesapal"
+      ? "Request & continue to secure checkout"
+      : method === "daraja_stk"
+        ? "Request & send STK Push"
+        : "Request & view M-Pesa details";
   submitButton.firstChild.textContent = `${label} `;
-}
-
-function updateStkPhoneField() {
-  const isStkSelected = bookingForm.querySelector('input[name="paymentMethod"]:checked')?.value === "daraja_stk";
-  const phoneField = document.querySelector("#stk-phone-field");
-  const phoneInput = document.querySelector("#stk-phone");
-  phoneField.hidden = !isStkSelected;
-  phoneInput.required = isStkSelected;
 }
 
 async function loadPaymentOptions() {
@@ -263,8 +257,8 @@ async function loadPaymentOptions() {
   }
   darajaStkAvailable = result.darajaStkPush.available;
   document.querySelector("#daraja-payment-help").textContent = darajaStkAvailable
-    ? "Enter a Kenyan M-Pesa number. Safaricom will send a secure payment prompt to that phone."
-    : "You can select this option and enter a number, but STK Push cannot start until Safaricom merchant credentials and a public HTTPS callback are configured.";
+    ? "Safaricom will send a secure payment prompt to the mobile number above."
+    : "STK Push cannot start until Safaricom merchant credentials and a public HTTPS callback are configured.";
   updatePaymentActionLabel();
 }
 
@@ -290,7 +284,6 @@ serviceSelect.addEventListener("change", updateServiceSummary);
 hoursSelect.addEventListener("change", () => updateServiceSummary());
 bookingForm.querySelectorAll('input[name="paymentMethod"]').forEach((input) => {
   input.addEventListener("change", () => {
-    updateStkPhoneField();
     updatePaymentActionLabel();
   });
 });
@@ -307,24 +300,23 @@ bookingForm.addEventListener("submit", async (event) => {
   const formData = new FormData(bookingForm);
   const service = serviceDetails();
   const selectedPaymentMethod = String(formData.get("paymentMethod"));
-  if (selectedPaymentMethod === "daraja_stk" &&
-    !/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/.test(String(formData.get("stkPhone")).replace(/[\s()-]/g, ""))) {
+  const phoneNumber = String(formData.get("phoneNumber")).trim();
+  if (!/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/.test(phoneNumber.replace(/[\s()-]/g, ""))) {
     document.querySelector("#payment-help").textContent =
       "Enter a valid Kenyan mobile number, such as 0712345678 or +254712345678.";
-    document.querySelector("#stk-phone").focus();
+    document.querySelector("#phone-number").focus();
     return;
   }
   if (selectedPaymentMethod === "daraja_stk" && !darajaStkAvailable) {
     document.querySelector("#payment-help").textContent =
       "STK Push is not active on this server yet. Configure the Daraja shortcode, consumer key/secret, passkey, and public HTTPS callback URL before submitting your booking.";
-    document.querySelector("#stk-phone").focus();
     return;
   }
   savedFocusTarget = document.activeElement instanceof HTMLElement ? document.activeElement : submitButton;
   let submitted = false;
   submitButton.disabled = true;
   submitButton.setAttribute("aria-busy", "true");
-  submitButton.firstChild.textContent = "Saving request & deposit… ";
+  submitButton.firstChild.textContent = selectedPaymentMethod === "none" ? "Confirming booking… " : "Saving request & deposit… ";
 
   try {
     const response = await fetch("/api/bookings", {
@@ -338,6 +330,8 @@ bookingForm.addEventListener("submit", async (event) => {
         hours: service.hours,
         name: String(formData.get("name")).trim(),
         email: String(formData.get("email")).trim(),
+        phoneNumber,
+        depositMethod: selectedPaymentMethod,
         note: String(formData.get("note") ?? "").trim(),
       }),
     });
@@ -352,22 +346,24 @@ bookingForm.addEventListener("submit", async (event) => {
 
     const savedBooking = result.booking;
     submitted = true;
-    let paymentResponse;
-    let payment;
-    try {
-      paymentResponse = await fetch("/api/payments", {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({
-          bookingId: savedBooking.id,
-          method: selectedPaymentMethod,
-          phoneNumber: selectedPaymentMethod === "daraja_stk" ? String(formData.get("stkPhone")).trim() : undefined,
-        }),
-      });
-      payment = await paymentResponse.json();
-    } catch {
-      paymentResponse = { ok: false };
-      payment = { error: "The request was saved, but payment could not be reached. Contact Eroll before trying to pay again." };
+    let paymentResponse = { ok: false };
+    let payment = {};
+    if (selectedPaymentMethod !== "none") {
+      try {
+        paymentResponse = await fetch("/api/payments", {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({
+            bookingId: savedBooking.id,
+            method: selectedPaymentMethod,
+            phoneNumber: selectedPaymentMethod === "daraja_stk" ? savedBooking.phoneNumber : undefined,
+          }),
+        });
+        payment = await paymentResponse.json();
+      } catch {
+        paymentResponse = { ok: false };
+        payment = { error: "The booking was saved, but payment could not be reached. Contact Eroll before trying to pay." };
+      }
     }
     if (paymentResponse.ok && payment.checkoutUrl) {
       if (!payment.checkoutUrl.startsWith("https://")) throw new Error("The payment provider returned an invalid checkout link.");
@@ -377,11 +373,13 @@ bookingForm.addEventListener("submit", async (event) => {
     document.querySelector("#confirmation-name").textContent = savedBooking.name;
     document.querySelector("#confirmation-summary").textContent =
       `${savedBooking.serviceName} · ${formatDate(parseDate(savedBooking.date), { weekday: "long", month: "long", day: "numeric" })} at ${savedBooking.time} (${savedBooking.timeZone}) · ${savedBooking.durationLabel} · ${formatPrice(savedBooking.price, savedBooking.currency)}${savedBooking.pricingUnit === "hour" ? ` (${savedBooking.billableHours} ${savedBooking.billableHours === 1 ? "hour" : "hours"} at ${formatPrice(savedBooking.price / savedBooking.billableHours, savedBooking.currency)}/hour)` : " per project"}. ${result.message}`;
-    document.querySelector("#confirmation-title").firstChild.textContent = "Request received, ";
-    document.querySelector(".demo-notice").textContent =
-      `Request #${savedBooking.id} · ${result.message} A 50% deposit is required before confirmation.`;
+    document.querySelector("#confirmation-title").firstChild.textContent =
+      savedBooking.status === "confirmed" ? "Booking confirmed, " : "Request received, ";
+    document.querySelector(".demo-notice").textContent = result.message;
     const instructions = document.querySelector("#payment-instructions");
-    if (paymentResponse.ok && payment.reference) {
+    if (selectedPaymentMethod === "none") {
+      instructions.hidden = true;
+    } else if (paymentResponse.ok && payment.reference) {
       document.querySelector("#payment-reference").textContent = payment.reference;
       document.querySelector("#payment-status-link").href = `/payment-status.html?reference=${encodeURIComponent(payment.reference)}`;
       if (selectedPaymentMethod === "daraja_stk") {
@@ -420,7 +418,6 @@ bookingForm.addEventListener("submit", async (event) => {
     confirmation.hidden = false;
     document.querySelector("#close-confirmation").focus();
     bookingForm.reset();
-    updateStkPhoneField();
     hoursSelect.value = "1";
     updateServiceSummary({ reloadAvailability: false });
     await loadAvailability({ chooseFirstDate: true });
@@ -432,7 +429,6 @@ bookingForm.addEventListener("submit", async (event) => {
     updatePaymentActionLabel();
     if (submitted) {
       bookingForm.reset();
-      updateStkPhoneField();
     }
   }
 });

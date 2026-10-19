@@ -4,14 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import Database from "better-sqlite3";
-import { createApp, createBookingStore, createDarajaClient, createEmailTransport, createPesapalClient } from "./server.js";
+import { createAfricasTalkingClient, createApp, createBookingStore, createDarajaClient, createEmailTransport, createPesapalClient } from "./server.js";
 
 const store = createBookingStore();
 const deliveredEmails = [];
+const deliveredSms = [];
 const app = createApp({
   store,
   adminToken: "test-admin-token",
   notificationEmail: "nyakwerieroll254@gmail.com",
+  sms: {
+    configured: true,
+    sendMessage: async (message) => {
+      deliveredSms.push(message);
+      return { status: "sent" };
+    },
+  },
   mailer: {
     sendMail: async (message) => {
       deliveredEmails.push(message);
@@ -96,6 +104,41 @@ test("requires an SMTP password to enable email and rejects invalid SMTP ports",
     SMTP_PASS: "test-app-password",
   });
   assert.equal(typeof mailer.sendMail, "function");
+});
+
+test("sends booking SMS through the configured Africa's Talking environment", async () => {
+  let request;
+  const sms = createAfricasTalkingClient({
+    env: {
+      AFRICASTALKING_ENVIRONMENT: "sandbox",
+      AFRICASTALKING_USERNAME: "sandbox",
+      AFRICASTALKING_API_KEY: "test-api-key",
+      AFRICASTALKING_SENDER_ID: "Eroll",
+    },
+    fetchImpl: async (url, options) => {
+      request = { url: String(url), options };
+      return Response.json({
+        SMSMessageData: {
+          Recipients: [{ statusCode: 102, status: "Queued" }],
+        },
+      });
+    },
+  });
+
+  assert.equal(sms.configured, true);
+  assert.deepEqual(await sms.sendMessage({
+    phoneNumber: "254712345678",
+    message: "Booking confirmed.",
+  }), { status: "queued" });
+  assert.equal(request.url, "https://api.sandbox.africastalking.com/version1/messaging");
+  assert.equal(request.options.headers.apiKey, "test-api-key");
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(request.options.body)), {
+    username: "sandbox",
+    to: "+254712345678",
+    message: "Booking confirmed.",
+    from: "Eroll",
+  });
+  assert.equal(createAfricasTalkingClient({ env: {} }).configured, false);
 });
 
 test("creates Pesapal hosted orders and verifies their status through API 3.0", async () => {
@@ -246,6 +289,7 @@ test("verifies STK callbacks against the pending phone, amount, and Daraja query
   const paymentApp = createApp({
     store: paymentStore,
     mailer: null,
+    sms: { configured: false },
     daraja: {
       configured: true,
       requestStkPush: async () => ({
@@ -281,6 +325,8 @@ test("verifies STK callbacks against the pending phone, amount, and Daraja query
         timeZone: "UTC",
         name: "STK client",
         email: "stk@example.com",
+        phoneNumber: "0712345678",
+        depositMethod: "daraja_stk",
       }),
     });
     const { booking } = await bookingResponse.json();
@@ -397,6 +443,7 @@ test("rejects malformed, past, and unsupported booking requests", async () => {
       timeZone: "UTC",
       name: "Test client",
       email: "test@example.com",
+      phoneNumber: "0712345678",
     }),
   });
   assert.equal(response.status, 400);
@@ -421,6 +468,7 @@ test("rejects session times removed from the weekday schedule", async () => {
       timeZone: "UTC",
       name: "Old schedule",
       email: "old-schedule@example.com",
+      phoneNumber: "0712345678",
     }),
   });
   assert.equal(response.status, 400);
@@ -443,6 +491,8 @@ test("charges lecture rates by selected hours and rejects invalid durations", as
     hours: 3,
     name: "Robotics student",
     email: "student@example.com",
+    phoneNumber: "0712345678",
+    depositMethod: "manual_mpesa",
   };
   const response = await fetch(`${baseUrl}/api/bookings`, {
     method: "POST",
@@ -457,6 +507,9 @@ test("charges lecture rates by selected hours and rejects invalid durations", as
   assert.equal(saved.currency, "KES");
   assert.equal(saved.pricingUnit, "hour");
   assert.equal(saved.billableHours, 3);
+  assert.equal(saved.status, "pending");
+  assert.equal(saved.phoneNumber, "254712345678");
+  assert.equal(store.listPayments().length, 0);
 
   const mediaAvailability = await fetch(
     `${baseUrl}/api/availability?month=${month}&service=media-editing&timeZone=UTC`,
@@ -474,6 +527,7 @@ test("charges lecture rates by selected hours and rejects invalid durations", as
       timeZone: "UTC",
       name: "Media client",
       email: "media@example.com",
+      phoneNumber: "0712345678",
     }),
   });
   assert.equal(mediaResponse.status, 201);
@@ -482,6 +536,7 @@ test("charges lecture rates by selected hours and rejects invalid durations", as
   assert.equal(mediaBooking.durationMinutes, 60);
   assert.equal(mediaBooking.pricingUnit, "hour");
   assert.equal(mediaBooking.billableHours, 1);
+  assert.equal(mediaBooking.status, "confirmed");
 
   const invalid = await fetch(`${baseUrl}/api/bookings`, {
     method: "POST",
@@ -507,6 +562,8 @@ test("persists a web development project request and rejects overlapping booking
     timeZone: "UTC",
     name: "Test client",
     email: "test@example.com",
+    phoneNumber: "0712345678",
+    depositMethod: "manual_mpesa",
     note: "A <script>alert('x')</script> project brief",
   };
   const bookingsBefore = store.listBookings().length;
@@ -524,13 +581,18 @@ test("persists a web development project request and rejects overlapping booking
   const { booking: saved } = createResponse;
   assert.equal(saved.name, booking.name);
   assert.equal(saved.status, "pending");
+  assert.equal(saved.phoneNumber, "254712345678");
+  assert.deepEqual(saved.notifications, { email: "sent", sms: "sent" });
   assert.equal(saved.timeZone, booking.timeZone);
   assert.equal(saved.price, 20000);
   assert.equal(saved.currency, "KES");
   assert.equal(saved.pricingUnit, "project");
   assert.equal(saved.durationMinutes, 60);
   assert.equal(createResponse.notificationStatus, "sent");
+  assert.deepEqual(createResponse.notifications, { email: "sent", sms: "sent" });
   assert.equal(deliveredEmails.length - emailsBefore, 2);
+  assert.equal(deliveredSms.at(-1).phoneNumber, "254712345678");
+  assert.match(deliveredSms.at(-1).message, /booking #\d+: .* PENDING; deposit optional\./);
   const [ownerEmail, clientEmail] = deliveredEmails.slice(emailsBefore);
   assert.equal(ownerEmail.to, "nyakwerieroll254@gmail.com");
   assert.equal(ownerEmail.replyTo, booking.email);
@@ -562,6 +624,12 @@ test("protects booking management and supports confirmation and cancellation", a
   assert.equal(authorized.status, 200);
   const { bookings } = await authorized.json();
   assert.equal(bookings.length, 3);
+  assert.ok(bookings.some((booking) =>
+    booking.status === "confirmed" &&
+    booking.phoneNumber === "254712345678" &&
+    booking.notifications.email === "sent" &&
+    booking.notifications.sms === "sent",
+  ));
 
   const paymentResponse = await fetch(`${baseUrl}/api/payments`, {
     method: "POST",
@@ -609,6 +677,7 @@ test("reports manual M-Pesa availability and keeps automated payment disabled wi
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     depositPercent: 50,
+    depositRequired: false,
     manualMpesa: { available: true, accountNumber: "0704437275", accountName: "EROLL JOSEPHAT" },
     onlineCheckout: { available: false, provider: "Pesapal", methods: ["M-Pesa", "Card"] },
     darajaStkPush: {
@@ -626,6 +695,7 @@ test("persists a Pesapal deposit and verifies callbacks against the provider sta
     store: paymentStore,
     adminToken: "payment-admin-token",
     mailer: null,
+    sms: { configured: false },
     pesapal: {
       configured: true,
       canRegisterIpn: false,
@@ -650,6 +720,7 @@ test("persists a Pesapal deposit and verifies callbacks against the provider sta
     const paymentApp = createApp({
       store: paymentStore,
       mailer: null,
+      sms: { configured: false },
       pesapal: {
         configured: true,
         canRegisterIpn: false,
@@ -679,6 +750,8 @@ test("persists a Pesapal deposit and verifies callbacks against the provider sta
           timeZone: "UTC",
           name: "Retry safety",
           email: "retry-safety@example.com",
+          phoneNumber: "0712345678",
+          depositMethod: "pesapal",
         }),
       });
       const { booking } = await bookingResponse.json();
@@ -722,6 +795,8 @@ test("persists a Pesapal deposit and verifies callbacks against the provider sta
         timeZone: "UTC",
         name: "Deposit client",
         email: "deposit@example.com",
+        phoneNumber: "0712345678",
+        depositMethod: "pesapal",
       }),
     });
     const { booking } = await bookingResponse.json();
@@ -785,6 +860,7 @@ test("keeps a saved booking and reports notification failures", async () => {
   const notificationApp = createApp({
     store: notificationStore,
     notificationEmail: "nyakwerieroll254@gmail.com",
+    sms: { configured: false },
     mailer: { sendMail: async () => { throw new Error("SMTP unavailable"); } },
   });
   const notificationServer = notificationApp.listen(0);
@@ -809,12 +885,15 @@ test("keeps a saved booking and reports notification failures", async () => {
         timeZone: "UTC",
         name: "Mail test",
         email: "mail-test@example.com",
+        phoneNumber: "0712345678",
       }),
     });
     assert.equal(response.status, 201);
     const result = await response.json();
     assert.equal(result.notificationStatus, "failed");
-    assert.match(result.message, /request is saved/);
+    assert.match(result.message, /booking is confirmed/);
+    assert.deepEqual(result.notifications, { email: "failed", sms: "not_configured" });
+    assert.deepEqual(notificationStore.listBookings()[0].notification_sms_status, "not_configured");
     assert.equal(notificationStore.listBookings().length, 1);
   } finally {
     await new Promise((resolve, reject) => notificationServer.close((error) => error ? reject(error) : resolve()));
@@ -840,6 +919,7 @@ test("persists bookings when the SQLite store is reopened", () => {
       timeZone: "UTC",
       name: "Persistent client",
       email: "persistent@example.com",
+      phoneNumber: "254712345678",
       note: "",
       hours: 1,
       startMs,
@@ -926,6 +1006,7 @@ test("migrates existing payment rows to allow Daraja STK Push", () => {
       timeZone: "UTC",
       name: "New STK client",
       email: "new-stk@example.com",
+      phoneNumber: "254712345678",
       note: "",
       hours: 1,
       startMs: Date.parse(`${localDate}T07:00:00.000Z`),

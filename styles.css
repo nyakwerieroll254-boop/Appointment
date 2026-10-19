@@ -173,6 +173,7 @@ h1, h2, h3, p { margin-top: 0; }
 .details-heading h3 { font-size: 20px; }
 .optional-label { color: #989c94; font-size: 8px; font-weight: 400; }
 .form-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.form-fields .input-group:last-child { grid-column: 1 / -1; }
 .input-group { min-width: 0; }
 .input-group input, textarea { width: 100%; border: 1px solid var(--line); border-radius: 2px; background: #fff; color: var(--ink); font-size: 10px; }
 .input-group input { height: 39px; padding: 0 11px; }
@@ -409,11 +410,6 @@ body { background: var(--paper); color: var(--ink); font-size: 15px; line-height
 .payment-method-option strong { color: var(--navy); font-size: 10px; }
 .payment-method-option small { margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .payment-method-option.payment-method-disabled { cursor: not-allowed; opacity: .65; }
-.stk-phone-field { display: grid; gap: 6px; padding: 5px 12px 10px 39px; }
-.stk-phone-field[hidden] { display: none; }
-.stk-phone-field .field-label { margin: 0; }
-.stk-phone-field input { min-height: 40px; padding: 0 11px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); font-size: 11px; }
-.stk-phone-field > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
 .payment-help { margin: 2px 0 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
 .deposit-summary { margin-top: 4px; color: var(--teal); font-size: 9px; font-weight: 700; }
 .deposit-summary strong { color: var(--teal); font-size: inherit; font-weight: 800; }

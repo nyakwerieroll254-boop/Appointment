@@ -27,6 +27,8 @@ const bookingSchema = z.object({
   hours: z.number().int().min(1).max(4).optional().default(1),
   name: z.string().trim().min(1).max(100),
   email: z.email().max(254),
+  phoneNumber: z.string().trim().min(1).max(20),
+  depositMethod: z.enum(["none", "manual_mpesa", "pesapal", "daraja_stk"]).optional().default("none"),
   note: z.string().max(1000).optional().default(""),
 }).strict();
 const bookingStatusSchema = z.object({
@@ -326,6 +328,67 @@ export function createEmailTransport(env = process.env) {
   return { sendMail: (message) => transporter.sendMail({ from, ...message }) };
 }
 
+export function createAfricasTalkingClient({ env = process.env, fetchImpl = fetch } = {}) {
+  const username = env.AFRICASTALKING_USERNAME?.trim() ?? "";
+  const apiKey = env.AFRICASTALKING_API_KEY?.trim() ?? "";
+  const senderId = env.AFRICASTALKING_SENDER_ID?.trim() ?? "";
+  const environment = env.AFRICASTALKING_ENVIRONMENT?.trim() || "sandbox";
+  if (!["sandbox", "production"].includes(environment)) {
+    throw new Error("AFRICASTALKING_ENVIRONMENT must be sandbox or production.");
+  }
+  const configured = Boolean(username && apiKey);
+  const baseUrl = environment === "production"
+    ? "https://api.africastalking.com"
+    : "https://api.sandbox.africastalking.com";
+
+  return {
+    configured,
+    async sendMessage({ phoneNumber, message }) {
+      if (!configured) throw new Error("Africa's Talking SMS is not configured.");
+      const normalizedPhoneNumber = normalizeKenyanPhoneNumber(phoneNumber);
+      if (!normalizedPhoneNumber) {
+        throw new Error("A valid Kenyan mobile number is required for SMS notifications.");
+      }
+      if (typeof message !== "string" || !message.trim()) {
+        throw new Error("An SMS notification message is required.");
+      }
+
+      const body = new URLSearchParams({
+        username,
+        to: `+${normalizedPhoneNumber}`,
+        message,
+      });
+      if (senderId) body.set("from", senderId);
+
+      const response = await fetchImpl(`${baseUrl}/version1/messaging`, {
+        method: "POST",
+        headers: {
+          apiKey,
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+      let result;
+      try {
+        result = await response.json();
+      } catch {
+        throw new Error("Africa's Talking returned an invalid SMS response.");
+      }
+      const recipients = result.SMSMessageData?.Recipients;
+      if (!response.ok || !Array.isArray(recipients) || recipients.length !== 1) {
+        throw new Error("Africa's Talking could not accept the SMS notification.");
+      }
+      const statusCode = Number(recipients[0].statusCode);
+      if (![100, 101, 102].includes(statusCode)) {
+        throw new Error("Africa's Talking rejected the SMS notification.");
+      }
+      return { status: statusCode === 101 ? "sent" : "queued" };
+    },
+  };
+}
+
 function escapeHtml(value) {
   return value.replace(/[&<>"']/g, (character) => ({
     "&": "&amp;",
@@ -353,12 +416,16 @@ function createBookingEmails(booking, notificationEmail) {
     `Duration: ${duration}`,
     booking.pricing_unit === "hour" ? `Billable hours: ${booking.billable_hours}` : null,
     `Price: ${price}`,
-    `50% deposit due: ${formatPrice(Math.round(booking.price_cents / 2) / 100, booking.currency)}`,
+    booking.status === "confirmed"
+      ? "Deposit: not required"
+      : `Optional 50% deposit: ${formatPrice(Math.round(booking.price_cents / 2) / 100, booking.currency)}`,
     `Name: ${booking.client_name}`,
     `Email: ${booking.client_email}`,
+    `Mobile: +${booking.client_phone}`,
   ].filter(Boolean);
   if (booking.client_note) details.push(`Note: ${booking.client_note}`);
   const text = details.join("\n");
+  const confirmedWithoutDeposit = booking.status === "confirmed";
   const billing = booking.pricing_unit === "hour"
     ? `<p>${booking.billable_hours} hour${booking.billable_hours === 1 ? "" : "s"} at ${formatPrice(booking.price_cents / 100 / booking.billable_hours, booking.currency)} per hour</p>`
     : "<p>Project fee</p>";
@@ -367,43 +434,86 @@ function createBookingEmails(booking, notificationEmail) {
     <p><strong>${safeService}</strong></p>
     <p>${safeDate} at ${safeTime} (${safeTimeZone}) · ${duration} · ${price}</p>
     ${billing}
-    <p><strong>${safeName}</strong><br><a href="mailto:${safeEmail}">${safeEmail}</a></p>
+    <p><strong>${safeName}</strong><br><a href="mailto:${safeEmail}">${safeEmail}</a><br>+${booking.client_phone}</p>
     ${safeNote ? `<p><strong>Note:</strong><br>${safeNote}</p>` : ""}
-    <p>50% deposit due: <strong>${formatPrice(Math.round(booking.price_cents / 2) / 100, booking.currency)}</strong></p>
-    <p>Status: awaiting deposit verification; appointment is not yet confirmed.</p>`;
+    ${confirmedWithoutDeposit
+    ? "<p>No deposit was collected. The appointment is confirmed.</p>"
+    : `<p>Optional 50% deposit: <strong>${formatPrice(Math.round(booking.price_cents / 2) / 100, booking.currency)}</strong></p><p>Status: awaiting deposit verification; appointment is not yet confirmed.</p>`}`;
 
   return [
     {
       to: notificationEmail,
       replyTo: booking.client_email,
-      subject: `New appointment request #${booking.id}`,
+      subject: `${confirmedWithoutDeposit ? "New confirmed appointment" : "New appointment request"} #${booking.id}`,
       text,
       html,
     },
     {
       to: booking.client_email,
-      subject: `We received your appointment request #${booking.id}`,
-      text: `Hi ${booking.client_name},\n\nYour appointment request is saved and awaiting confirmation. A 50% deposit is due; follow the booking page's M-Pesa instructions. Eroll Josephat will verify payment before confirming the appointment.\n\n${text}`,
-      html: `<p>Hi ${safeName},</p><p>Your appointment request is saved and awaiting deposit verification. A 50% deposit is due; follow the M-Pesa instructions on the booking page. Eroll Josephat will verify payment before confirming the appointment.</p>${html}`,
+      subject: `${confirmedWithoutDeposit ? "Appointment confirmed" : "Appointment request received"} #${booking.id}`,
+      text: confirmedWithoutDeposit
+        ? `Hi ${booking.client_name},\n\nYour appointment is confirmed. No deposit was charged.\n\n${text}`
+        : `Hi ${booking.client_name},\n\nYour appointment request is saved and awaiting confirmation. The 50% deposit is optional; if you choose to pay, Eroll Josephat will verify it before confirming the appointment.\n\n${text}`,
+      html: confirmedWithoutDeposit
+        ? `<p>Hi ${safeName},</p><p>Your appointment is confirmed. No deposit was charged.</p>${html}`
+        : `<p>Hi ${safeName},</p><p>Your appointment request is saved and awaiting confirmation. The 50% deposit is optional; if you choose to pay, Eroll Josephat will verify it before confirming the appointment.</p>${html}`,
     },
   ];
 }
 
-async function sendBookingNotifications(mailer, booking, notificationEmail) {
-  if (!mailer) return "not_configured";
+function createBookingSms(booking) {
+  const name = booking.client_name.replace(/\s+/g, " ").slice(0, 30);
+  const status = booking.status === "confirmed"
+    ? "CONFIRMED; no deposit."
+    : "PENDING; deposit optional.";
+  return `Hi ${name}, booking #${booking.id}: ${booking.service_name} on ${booking.local_date} at ${booking.local_time}. ${status}`;
+}
 
-  const results = await Promise.allSettled(
-    createBookingEmails(booking, notificationEmail).map((message) => Promise.resolve().then(() => mailer.sendMail(message))),
-  );
-  const failures = results.filter((result) => result.status === "rejected");
-  if (failures.length) {
-    console.error("Appointment notification delivery failed:", failures.map(({ reason }) =>
-      reason instanceof Error ? reason.message : "Unknown mail delivery error",
-    ));
+async function sendBookingNotifications({ mailer, sms }, booking, notificationEmail) {
+  const emailStatusPromise = !mailer
+    ? Promise.resolve("not_configured")
+    : Promise.allSettled(
+      createBookingEmails(booking, notificationEmail).map((message) => Promise.resolve().then(() => mailer.sendMail(message))),
+    ).then((results) => {
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length) {
+        console.error("Appointment email delivery failed:", failures.map(({ reason }) =>
+          reason instanceof Error ? reason.message : "Unknown email delivery error",
+        ));
+      }
+      if (!failures.length) return "sent";
+      return failures.length === results.length ? "failed" : "partial";
+    });
+  const smsStatusPromise = sms?.configured === false || typeof sms?.sendMessage !== "function"
+    ? Promise.resolve("not_configured")
+    : Promise.resolve()
+      .then(() => sms.sendMessage({ phoneNumber: booking.client_phone, message: createBookingSms(booking) }))
+      .then((result) => result?.status === "queued" ? "queued" : "sent")
+      .catch((error) => {
+        console.error("Appointment SMS delivery failed:", error instanceof Error ? error.message : "Unknown SMS delivery error");
+        return "failed";
+      });
+  const [email, smsStatus] = await Promise.all([emailStatusPromise, smsStatusPromise]);
+  const channelStatuses = [email, smsStatus];
+  const allNotificationsAccepted = channelStatuses.every((status) => status === "sent" || status === "queued");
+  let notificationStatus;
+  if (allNotificationsAccepted) {
+    notificationStatus = channelStatuses.includes("queued") ? "queued" : "sent";
+  } else if (channelStatuses.every((status) => status === "not_configured")) {
+    notificationStatus = "not_configured";
+  } else if (channelStatuses.some((status) => status === "sent" || status === "queued" || status === "partial")) {
+    notificationStatus = "partial";
+  } else {
+    notificationStatus = "failed";
   }
-  if (failures.length === results.length) return "failed";
-  if (failures.length) return "partial";
-  return "sent";
+  const message = {
+    sent: "Email and SMS notifications were sent.",
+    queued: "Email was sent and Africa's Talking accepted the SMS notification for delivery.",
+    partial: "The booking was saved, but one or more email or SMS notifications could not be sent.",
+    failed: "The booking was saved, but the email and SMS notifications could not be sent.",
+    not_configured: "The booking was saved, but email and SMS delivery are not configured yet.",
+  }[notificationStatus];
+  return { email, sms: smsStatus, notificationStatus, message };
 }
 
 export function createBookingStore(dbPath = ":memory:") {
@@ -421,6 +531,7 @@ export function createBookingStore(dbPath = ":memory:") {
       price_cents INTEGER NOT NULL,
       client_name TEXT NOT NULL,
       client_email TEXT NOT NULL,
+      client_phone TEXT NOT NULL,
       client_note TEXT NOT NULL DEFAULT '',
       local_date TEXT NOT NULL,
       local_time TEXT NOT NULL,
@@ -430,6 +541,8 @@ export function createBookingStore(dbPath = ":memory:") {
       currency TEXT NOT NULL DEFAULT 'USD',
       pricing_unit TEXT NOT NULL DEFAULT 'legacy',
       billable_hours INTEGER NOT NULL DEFAULT 1,
+      notification_email_status TEXT NOT NULL DEFAULT 'pending',
+      notification_sms_status TEXT NOT NULL DEFAULT 'pending',
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'cancelled')),
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
@@ -507,6 +620,15 @@ export function createBookingStore(dbPath = ":memory:") {
   if (!bookingColumns.has("billable_hours")) {
     db.exec("ALTER TABLE bookings ADD COLUMN billable_hours INTEGER NOT NULL DEFAULT 1");
   }
+  if (!bookingColumns.has("client_phone")) {
+    db.exec("ALTER TABLE bookings ADD COLUMN client_phone TEXT NOT NULL DEFAULT ''");
+  }
+  if (!bookingColumns.has("notification_email_status")) {
+    db.exec("ALTER TABLE bookings ADD COLUMN notification_email_status TEXT NOT NULL DEFAULT 'not_configured'");
+  }
+  if (!bookingColumns.has("notification_sms_status")) {
+    db.exec("ALTER TABLE bookings ADD COLUMN notification_sms_status TEXT NOT NULL DEFAULT 'not_configured'");
+  }
 
   const store = {
     hasConflict(startAt, endAt) {
@@ -526,15 +648,16 @@ export function createBookingStore(dbPath = ":memory:") {
       const insert = db.prepare(`
         INSERT INTO bookings (
           service, service_name, duration_minutes, price_cents, currency, pricing_unit, billable_hours,
-          client_name, client_email, client_note, local_date, local_time, time_zone, start_at, end_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          client_name, client_email, client_phone, client_note, local_date, local_time, time_zone, start_at, end_at,
+          status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const create = db.transaction(() => {
         if (store.hasConflict(startAt, endAt)) return null;
         const result = insert.run(
           booking.service, service.name, durationMinutes, price * 100, "KES", service.pricingUnit, billableHours,
-          booking.name, booking.email, booking.note, booking.date, booking.time,
-          booking.timeZone, startAt, endAt,
+          booking.name, booking.email, booking.phoneNumber, booking.note, booking.date, booking.time,
+          booking.timeZone, startAt, endAt, booking.status ?? "pending",
         );
         return Number(result.lastInsertRowid);
       });
@@ -595,6 +718,12 @@ export function createBookingStore(dbPath = ":memory:") {
     },
     listBookings() {
       return db.prepare("SELECT * FROM bookings ORDER BY start_at ASC").all();
+    },
+    updateBookingNotificationStatus(id, { email, sms }) {
+      db.prepare(`
+        UPDATE bookings SET notification_email_status = ?, notification_sms_status = ?
+        WHERE id = ?
+      `).run(email, sms, id);
     },
     listPayments() {
       return db.prepare(`
@@ -714,12 +843,17 @@ function serializeBooking(booking) {
     billableHours: booking.billable_hours ?? 1,
     name: booking.client_name,
     email: booking.client_email,
+    phoneNumber: booking.client_phone,
     note: booking.client_note,
     date: booking.local_date,
     time: booking.local_time,
     timeZone: booking.time_zone,
     startAt: booking.start_at,
     status: booking.status,
+    notifications: {
+      email: booking.notification_email_status ?? "not_configured",
+      sms: booking.notification_sms_status ?? "not_configured",
+    },
     createdAt: booking.created_at,
   };
 }
@@ -728,6 +862,7 @@ export function createApp({
   store = createBookingStore(),
   adminToken = process.env.ADMIN_API_TOKEN ?? "",
   mailer = createEmailTransport(),
+  sms = createAfricasTalkingClient(),
   pesapal = createPesapalClient(),
   daraja = createDarajaClient(),
   notificationEmail = process.env.BOOKING_NOTIFICATION_EMAIL ?? DEFAULT_NOTIFICATION_EMAIL,
@@ -758,6 +893,7 @@ export function createApp({
   app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
   app.get("/api/payment-options", (_req, res) => res.json({
     depositPercent: 50,
+    depositRequired: false,
     manualMpesa: {
       available: true,
       accountNumber: MPESA_ACCOUNT_NUMBER,
@@ -843,6 +979,10 @@ export function createApp({
     }
 
     const booking = parsed.data;
+    const phoneNumber = normalizeKenyanPhoneNumber(booking.phoneNumber);
+    if (!phoneNumber) {
+      return res.status(400).json({ error: "Enter a valid Kenyan mobile number, for example 0712345678 or +254712345678." });
+    }
     const service = SERVICES[booking.service];
     if (booking.hours > service.maximumHours) {
       return res.status(400).json({ error: "Choose a duration supported by this service." });
@@ -867,22 +1007,27 @@ export function createApp({
     }
 
     try {
-      const id = store.createBooking({ ...booking, startMs });
+      const bookingStatus = booking.depositMethod === "none" ? "confirmed" : "pending";
+      const id = store.createBooking({
+        ...booking,
+        phoneNumber,
+        status: bookingStatus,
+        startMs,
+      });
       if (id === null) {
         return res.status(409).json({ error: "That time was just booked. Please choose another available time." });
       }
+      const notificationResult = await sendBookingNotifications({ mailer, sms }, store.getBooking(id), notificationEmail);
+      store.updateBookingNotificationStatus(id, notificationResult);
       const savedBooking = store.getBooking(id);
-      const notificationStatus = await sendBookingNotifications(mailer, savedBooking, notificationEmail);
-      const messages = {
-        sent: "Your request is saved. Confirmation emails were sent to you and Eroll.",
-        partial: "Your request is saved, but not all confirmation emails could be sent. Eroll will follow up.",
-        failed: "Your request is saved, but email notifications could not be sent. Eroll will follow up.",
-        not_configured: "Your request is saved. Email delivery is not configured yet; Eroll will follow up manually.",
-      };
       return res.status(201).json({
         booking: serializeBooking(savedBooking),
-        notificationStatus,
-        message: messages[notificationStatus],
+        notificationStatus: notificationResult.notificationStatus,
+        notifications: {
+          email: notificationResult.email,
+          sms: notificationResult.sms,
+        },
+        message: `${bookingStatus === "confirmed" ? "Your booking is confirmed with no deposit required." : "Your appointment request is saved and awaiting confirmation."} ${notificationResult.message}`,
       });
     } catch (error) {
       console.error("Unable to save appointment request:", error);
@@ -1200,7 +1345,8 @@ export function createApp({
     const booking = store.getBooking(id);
     if (!booking) return res.status(404).json({ error: "Active booking not found." });
     const requiredDeposit = Math.round(booking.price_cents * 0.5);
-    if (parsed.data.status === "confirmed" && store.completedPaymentTotal(id) < requiredDeposit) {
+    if (parsed.data.status === "confirmed" && booking.status !== "confirmed" &&
+      store.completedPaymentTotal(id) < requiredDeposit) {
       return res.status(409).json({ error: "Verify the 50% deposit before confirming this appointment." });
     }
     if (!store.updateBookingStatus(id, parsed.data.status)) {

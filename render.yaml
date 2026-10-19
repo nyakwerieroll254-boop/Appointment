@@ -21,3 +21,9 @@ services:
         value: sandbox
       - key: DARAJA_ENVIRONMENT
         value: sandbox
+      - key: AFRICASTALKING_ENVIRONMENT
+        value: sandbox
+      - key: AFRICASTALKING_USERNAME
+        sync: false
+      - key: AFRICASTALKING_API_KEY
+        sync: false
