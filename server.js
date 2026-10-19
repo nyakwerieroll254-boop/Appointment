@@ -73,7 +73,9 @@ export function createDarajaClient({ env = process.env, fetchImpl = fetch, now =
   const consumerSecret = env.DARAJA_CONSUMER_SECRET?.trim() ?? "";
   const shortcode = env.DARAJA_SHORTCODE?.trim() ?? "";
   const passkey = env.DARAJA_PASSKEY?.trim() ?? "";
-  const callbackUrl = env.DARAJA_CALLBACK_URL?.trim() ?? "";
+  const renderExternalUrl = env.RENDER_EXTERNAL_URL?.trim().replace(/\/+$/, "") ?? "";
+  const callbackUrl = env.DARAJA_CALLBACK_URL?.trim() ||
+    (renderExternalUrl ? `${renderExternalUrl}/api/payments/daraja/callback` : "");
   let validCallbackUrl = false;
   try {
     validCallbackUrl = new URL(callbackUrl).protocol === "https:";
@@ -195,7 +197,8 @@ export function createPesapalClient({ env = process.env, fetchImpl = fetch } = {
   const consumerKey = env.PESAPAL_CONSUMER_KEY?.trim() ?? "";
   const consumerSecret = env.PESAPAL_CONSUMER_SECRET?.trim() ?? "";
   const ipnId = env.PESAPAL_IPN_ID?.trim() ?? "";
-  const publicBaseUrl = env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "") ?? "";
+  const publicBaseUrl = env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "") ||
+    env.RENDER_EXTERNAL_URL?.trim().replace(/\/+$/, "") || "";
   let publicCallbackConfigured = false;
   try {
     publicCallbackConfigured = new URL(publicBaseUrl).protocol === "https:";

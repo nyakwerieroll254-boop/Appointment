@@ -13,6 +13,14 @@ Open [http://localhost:3000](http://localhost:3000). The server serves the front
 
 The site has separate Home, About, Services, individual service-detail, Contact, and Booking pages. Service detail pages link directly to the booking form with the selected service prefilled. Public files are served through an explicit allowlist; project and database files are not exposed as static content.
 
+## Deploy on Render
+
+This repository includes a Render Blueprint in `render.yaml`. Push the project to a GitHub repository, then in the Render Dashboard choose **New → Blueprint**, connect that repository, and deploy the Blueprint. It creates a Node web service with `/api/health` as its health check, a generated `ADMIN_API_TOKEN`, and a 1 GB persistent disk mounted at `/var/data` for the SQLite database. The service uses Render's paid Starter plan because SQLite data on a service without a persistent disk would be lost on restart or redeploy. The attached disk supports only one service instance; do not scale this SQLite deployment horizontally.
+
+Render provides `RENDER_EXTERNAL_URL` at runtime. Pesapal and Daraja use it to build their HTTPS callback URLs automatically; set `PUBLIC_BASE_URL` or `DARAJA_CALLBACK_URL` in the service environment only if you need to override the Render URL. Payment integrations are set to sandbox in the Blueprint. Before accepting real payments, add the merchant credentials and callback/IPN configuration in the Render service's environment, verify sandbox payments, and switch to production only after merchant approval. Add SMTP credentials in the Render Dashboard if email notifications are required. Never put secrets in `render.yaml` or source control.
+
+After the first deployment, use the Render service URL to check `/api/health`. Keep the generated admin token private. Back up the SQLite database and disk before making changes that could affect stored bookings.
+
 ### Deposits and payment methods
 
 Bookings require a 50% deposit calculated from the server-owned service price. The manual M-Pesa option instructs clients to send the deposit to `0704437275`, M-Pesa name `EROLL JOSEPHAT`. Manual transfers stay pending until you verify them against your M-Pesa statement. Use the protected `PATCH /api/admin/payments/:reference` endpoint with `{"status":"completed"}` before confirming the appointment. Do not mark a payment complete based on a screenshot or browser redirect.

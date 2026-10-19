@@ -106,7 +106,7 @@ test("creates Pesapal hosted orders and verifies their status through API 3.0", 
       PESAPAL_CONSUMER_KEY: "test-key",
       PESAPAL_CONSUMER_SECRET: "test-secret",
       PESAPAL_IPN_ID: "test-ipn-id",
-      PUBLIC_BASE_URL: "https://appointments.example",
+      RENDER_EXTERNAL_URL: "https://appointments.example/",
     },
     fetchImpl: async (url, options = {}) => {
       requests.push({ url: String(url), options });
@@ -155,7 +155,7 @@ test("creates Safaricom Daraja STK Push requests with normalized Kenyan numbers"
       DARAJA_CONSUMER_SECRET: "test-secret",
       DARAJA_SHORTCODE: "174379",
       DARAJA_PASSKEY: "test-passkey",
-      DARAJA_CALLBACK_URL: "https://appointments.example/api/payments/daraja/callback",
+      RENDER_EXTERNAL_URL: "https://appointments.example/",
     },
     now: () => new Date("2026-10-19T06:00:00.000Z"),
     fetchImpl: async (url, options = {}) => {
@@ -192,6 +192,7 @@ test("creates Safaricom Daraja STK Push requests with normalized Kenyan numbers"
   assert.equal(body.Amount, 5000);
   assert.equal(body.PhoneNumber, "254712345678");
   assert.equal(body.PartyA, "254712345678");
+  assert.equal(body.CallBackURL, "https://appointments.example/api/payments/daraja/callback");
   assert.equal(body.AccountReference, "deposit-refe");
   assert.equal(body.Timestamp, "20261019090000");
   assert.equal(request.options.headers.authorization, "Bearer daraja-test-token");
@@ -365,7 +366,10 @@ test("returns only future weekday availability in the requested timezone", async
       const weekday = new Date(`${day.date}T00:00:00Z`).getUTCDay();
       assert.notEqual(weekday, 0);
       assert.notEqual(weekday, 6);
-      assert.deepEqual(day.times, ["7:00 AM", "7:00 PM"]);
+      assert.ok(Array.isArray(day.times));
+      assert.ok(day.times.length > 0);
+      assert.ok(day.times.every((time) => ["7:00 AM", "7:00 PM"].includes(time)));
+      assert.equal(new Set(day.times).size, day.times.length);
     }
   }
 

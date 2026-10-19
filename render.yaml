@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: eroll-appointments
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: appointment-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_PATH
+        value: /var/data/bookings.sqlite
+      - key: ADMIN_API_TOKEN
+        generateValue: true
+      - key: PESAPAL_ENVIRONMENT
+        value: sandbox
+      - key: DARAJA_ENVIRONMENT
+        value: sandbox
