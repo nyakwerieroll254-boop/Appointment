@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Check the status of your appointment deposit payment." />
+    <meta name="theme-color" content="#111827" />
+    <title>Payment status — Eroll Josephat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/site.js" defer></script>
+    <script src="/payment-status.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar"><a class="wordmark" href="/index.html" aria-label="Eroll Josephat home"><span class="wordmark-mark">e.</span><span>EROLL JOSEPHAT</span></a><button class="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false"><span></span><span></span></button><nav class="topbar-nav" aria-label="Main navigation"><a href="/index.html">Home</a><a href="/about.html">About</a><a href="/services.html">Services</a><a href="/contact.html">Contact</a><a class="nav-cta" href="/booking.html">Book a service <span aria-hidden="true">↗</span></a></nav></header>
+    <main class="payment-status-page">
+      <section class="payment-status-card">
+        <p class="eyebrow">APPOINTMENT DEPOSIT</p>
+        <h1 id="payment-heading">Checking your payment…</h1>
+        <p id="payment-message" aria-live="polite">Your payment status is being checked with the payment record.</p>
+        <dl class="payment-status-details" id="payment-details" hidden>
+          <div><dt>Amount</dt><dd id="payment-status-amount"></dd></div>
+          <div><dt>Payment method</dt><dd id="payment-status-method"></dd></div>
+          <div><dt>Status</dt><dd id="payment-status-value"></dd></div>
+          <div><dt>Reference</dt><dd id="payment-status-reference"></dd></div>
+          <div id="payment-status-account-row" hidden><dt>M-Pesa account</dt><dd>EROLL JOSEPHAT · 0704437275</dd></div>
+          <div id="payment-status-confirmation-row" hidden><dt>Confirmation code</dt><dd id="payment-status-confirmation"></dd></div>
+        </dl>
+        <p class="payment-status-note" id="payment-status-note"></p>
+        <div class="button-row"><a class="primary-button" href="/booking.html">Back to booking ↗</a><a class="secondary-button" href="mailto:nyakwerieroll254@gmail.com">Contact Eroll</a></div>
+      </section>
+    </main>
+    <footer class="footer"><a class="wordmark footer-wordmark" href="/index.html"><span class="wordmark-mark">e.</span><span>EROLL JOSEPHAT</span></a><span>© <span data-year></span> Eroll Josephat · Digital, technology &amp; creative services</span><a href="mailto:nyakwerieroll254@gmail.com">Get in touch ↗</a></footer>
+  </body>
+</html>
