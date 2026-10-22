@@ -37,9 +37,9 @@ For email, enable 2-Step Verification on the Gmail account, create an App Passwo
 
 For SMS, set `AFRICASTALKING_ENVIRONMENT=sandbox`, `AFRICASTALKING_USERNAME`, and `AFRICASTALKING_API_KEY`; set `AFRICASTALKING_SENDER_ID` only if Africa's Talking has approved one for your account. Sandbox messages go through Africa's Talking's sandbox and are not live delivery. After approval, configure production credentials and `AFRICASTALKING_ENVIRONMENT=production` in the server environment. Keep all provider keys out of browser code and source control.
 
-Configure SMTP and Africa's Talking in Render's service environment (or local `.env`) and restart the server. Failed or unconfigured delivery does not undo a booking: notification state is saved in the backend, server logs delivery failures, and the booking response clearly reports channel status so follow-up can happen.
+For Render, enter the Gmail App Password for `SMTP_PASS`, and your Africa's Talking sandbox username and API key for `AFRICASTALKING_USERNAME` and `AFRICASTALKING_API_KEY` when creating or updating the Blueprint. Keep `AFRICASTALKING_ENVIRONMENT=sandbox` until live credentials and account approval are ready. Restart/redeploy after setting values. The application code and Blueprint fields are prepared, but email and SMS cannot be delivered until these provider credentials are supplied. Failed or unconfigured delivery does not undo a booking: notification state is saved in the backend, server logs delivery failures, and the booking response clearly reports channel status so follow-up can happen.
 
-All four services are currently available on weekdays at 7:00 AM and 7:00 PM in the visitor's local timezone:
+All four services are available on weekdays with hourly start times beginning at 7:00 AM. Appointments must finish by 7:00 PM in the visitor's local timezone. One-hour appointments can start from 7:00 AM through 6:00 PM; multi-hour lecture start times are narrowed so the selected consecutive hours finish by 7:00 PM.
 
 - Web Development: KSh 20,000 per project; a 60-minute consultation.
 - Robotics lectures: KSh 2,000 per hour; clients can book 1–4 hours.
@@ -52,7 +52,7 @@ Hourly lecture requests reserve the selected number of consecutive hours. The se
 
 - `GET /api/health` — process health.
 - `GET /api/services` — server-owned service names, durations, and prices.
-- `GET /api/availability?month=YYYY-MM&service=robotics-lectures&hours=2&timeZone=Africa%2FNairobi` — available weekday time slots for a service and requested duration.
+- `GET /api/availability?month=YYYY-MM&service=robotics-lectures&hours=2&timeZone=Africa%2FNairobi` — hourly weekday start times for the service and duration, filtered so the appointment ends by 7:00 PM.
 - `POST /api/bookings` — validates and atomically saves a booking. The body contains `service`, `date` (`YYYY-MM-DD`), `time`, `timeZone` (IANA timezone), `name`, `email`, Kenyan `phoneNumber`, optional lecture `hours` (1–4), optional `note`, and `depositMethod` (`none`, `manual_mpesa`, `pesapal`, or `daraja_stk`). `none` is the default and confirms the booking immediately without payment; selecting a deposit method creates a pending booking.
 - `GET /api/payment-options` — lists deposit optionality, M-Pesa transfer instructions, and online checkout availability.
 - `POST /api/payments` — creates a manual M-Pesa deposit, Pesapal hosted checkout, or Safaricom STK Push. Body: `{"bookingId":1,"method":"manual_mpesa"}`, `{"bookingId":1,"method":"pesapal"}`, or `{"bookingId":1,"method":"daraja_stk","phoneNumber":"0712345678"}`.

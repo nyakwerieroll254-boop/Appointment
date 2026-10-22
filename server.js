@@ -10,11 +10,13 @@ import nodemailer from "nodemailer";
 import { z } from "zod";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const BOOKING_START_HOUR = 7;
+const BOOKING_END_HOUR = 19;
 const SERVICES = Object.freeze({
-  "web-development": { name: "Web Development", duration: 60, price: 20_000, pricingUnit: "project", maximumHours: 1, times: ["7:00 AM", "7:00 PM"] },
-  "robotics-lectures": { name: "Robotics lectures", duration: 60, price: 2_000, pricingUnit: "hour", maximumHours: 4, times: ["7:00 AM", "7:00 PM"] },
-  "computing-lectures": { name: "Computing lectures", duration: 60, price: 3_000, pricingUnit: "hour", maximumHours: 4, times: ["7:00 AM", "7:00 PM"] },
-  "media-editing": { name: "Media & Editing services", duration: 60, price: 1_500, pricingUnit: "hour", maximumHours: 1, times: ["7:00 AM", "7:00 PM"] },
+  "web-development": { name: "Web Development", duration: 60, price: 20_000, pricingUnit: "project", maximumHours: 1 },
+  "robotics-lectures": { name: "Robotics lectures", duration: 60, price: 2_000, pricingUnit: "hour", maximumHours: 4 },
+  "computing-lectures": { name: "Computing lectures", duration: 60, price: 3_000, pricingUnit: "hour", maximumHours: 4 },
+  "media-editing": { name: "Media & Editing services", duration: 60, price: 1_500, pricingUnit: "hour", maximumHours: 1 },
 });
 const serviceSchema = z.enum(Object.keys(SERVICES));
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -45,6 +47,19 @@ const paymentStatusSchema = z.object({
 const DEFAULT_NOTIFICATION_EMAIL = "nyakwerieroll254@gmail.com";
 const MPESA_ACCOUNT_NUMBER = "0704437275";
 const MPESA_ACCOUNT_NAME = "EROLL JOSEPHAT";
+
+function getAvailableStartTimes(serviceId, hours = 1) {
+  const service = SERVICES[serviceId];
+  const durationMinutes = service.duration * (service.pricingUnit === "hour" ? hours : 1);
+  const latestStartMinutes = BOOKING_END_HOUR * 60 - durationMinutes;
+  const times = [];
+  for (let hour = BOOKING_START_HOUR; hour * 60 <= latestStartMinutes; hour += 1) {
+    const twelveHour = hour % 12 || 12;
+    const meridiem = hour < 12 ? "AM" : "PM";
+    times.push(`${twelveHour}:00 ${meridiem}`);
+  }
+  return times;
+}
 
 function normalizeKenyanPhoneNumber(value) {
   const digits = value.replace(/[\s()+-]/g, "");
@@ -430,7 +445,7 @@ function createBookingEmails(booking, notificationEmail) {
     ? `<p>${booking.billable_hours} hour${booking.billable_hours === 1 ? "" : "s"} at ${formatPrice(booking.price_cents / 100 / booking.billable_hours, booking.currency)} per hour</p>`
     : "<p>Project fee</p>";
   const html = `
-    <h2>Appointment request #${booking.id}</h2>
+    <h2>${confirmedWithoutDeposit ? "Confirmed appointment" : "Appointment request"} #${booking.id}</h2>
     <p><strong>${safeService}</strong></p>
     <p>${safeDate} at ${safeTime} (${safeTimeZone}) · ${duration} · ${price}</p>
     ${billing}
@@ -944,7 +959,7 @@ export function createApp({
     const { lastBookableDate } = getDateRange(parsedTimeZone.data);
     const [year, month] = req.query.month.split("-").map(Number);
     const monthEndDate = new Date(Date.UTC(year, month, 0));
-    const { times } = SERVICES[parsedService.data];
+    const times = getAvailableStartTimes(parsedService.data, requestedHours);
     const days = [];
 
     for (let day = 1; day <= monthEndDate.getUTCDate(); day += 1) {
@@ -990,7 +1005,7 @@ export function createApp({
     if (!isValidCalendarDate(booking.date) || !isWeekday(booking.date)) {
       return res.status(400).json({ error: "Choose an available weekday." });
     }
-    if (!SERVICES[booking.service].times.includes(booking.time)) {
+    if (!getAvailableStartTimes(booking.service, booking.hours).includes(booking.time)) {
       return res.status(400).json({ error: "Choose an available time for this session." });
     }
 

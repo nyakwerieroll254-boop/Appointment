@@ -395,6 +395,10 @@ test("verifies STK callbacks against the pending phone, amount, and Daraja query
 });
 
 test("returns only future weekday availability in the requested timezone", async () => {
+  const hourlyStarts = Array.from({ length: 12 }, (_, index) => {
+    const hour = index + 7;
+    return `${hour % 12 || 12}:00 ${hour < 12 ? "AM" : "PM"}`;
+  });
   const month = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit",
   }).format(new Date()).slice(0, 7);
@@ -414,7 +418,7 @@ test("returns only future weekday availability in the requested timezone", async
       assert.notEqual(weekday, 6);
       assert.ok(Array.isArray(day.times));
       assert.ok(day.times.length > 0);
-      assert.ok(day.times.every((time) => ["7:00 AM", "7:00 PM"].includes(time)));
+      assert.ok(day.times.every((time) => hourlyStarts.includes(time)));
       assert.equal(new Set(day.times).size, day.times.length);
     }
   }
@@ -424,7 +428,21 @@ test("returns only future weekday availability in the requested timezone", async
       `${baseUrl}/api/availability?month=${month}&service=robotics-lectures&hours=${hours}&timeZone=America%2FLos_Angeles`,
     );
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).hours, hours);
+    const result = await response.json();
+    assert.equal(result.hours, hours);
+    const latestStartHour = 19 - hours;
+    const validStarts = hourlyStarts.filter((time) => {
+      const [clock, meridiem] = time.split(" ");
+      const hour = Number(clock.split(":")[0]) % 12 + (meridiem === "PM" ? 12 : 0);
+      return hour <= latestStartHour;
+    });
+    for (const day of result.days) {
+      assert.ok(day.times.every((time) => validStarts.includes(time)));
+    }
+    const futureDay = result.days.find((day) => day.date > result.today);
+    if (futureDay) {
+      assert.deepEqual(futureDay.times, validStarts);
+    }
   }
   const invalidDuration = await fetch(
     `${baseUrl}/api/availability?month=${month}&service=media-editing&hours=2&timeZone=America%2FLos_Angeles`,
@@ -464,7 +482,7 @@ test("rejects session times removed from the weekday schedule", async () => {
     body: JSON.stringify({
       service: "web-development",
       date: days[0].date,
-      time: "9:00 AM",
+      time: "7:30 AM",
       timeZone: "UTC",
       name: "Old schedule",
       email: "old-schedule@example.com",
@@ -472,6 +490,22 @@ test("rejects session times removed from the weekday schedule", async () => {
     }),
   });
   assert.equal(response.status, 400);
+
+  const lateFourHourSession = await fetch(`${baseUrl}/api/bookings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      service: "robotics-lectures",
+      date: days[0].date,
+      time: "4:00 PM",
+      timeZone: "UTC",
+      hours: 4,
+      name: "Late session",
+      email: "late-session@example.com",
+      phoneNumber: "0712345678",
+    }),
+  });
+  assert.equal(lateFourHourSession.status, 400);
   assert.equal(store.listBookings().length, 0);
 });
 

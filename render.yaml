@@ -17,6 +17,10 @@ services:
         value: /var/data/bookings.sqlite
       - key: ADMIN_API_TOKEN
         generateValue: true
+      - key: SMTP_USER
+        value: nyakwerieroll254@gmail.com
+      - key: SMTP_PASS
+        sync: false
       - key: PESAPAL_ENVIRONMENT
         value: sandbox
       - key: DARAJA_ENVIRONMENT
@@ -26,4 +30,6 @@ services:
       - key: AFRICASTALKING_USERNAME
         sync: false
       - key: AFRICASTALKING_API_KEY
+        sync: false
+      - key: AFRICASTALKING_SENDER_ID
         sync: false
